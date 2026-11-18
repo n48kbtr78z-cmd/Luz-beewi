@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Control BeeWi</title>
+<style>
+  :root{--bg:#111316;--card:#1b1e23;--txt:#eef0f3;--mut:#8a919c;--acc:#ffb547;--ok:#3ecf8e;--bad:#ff6b6b}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 -apple-system,system-ui,sans-serif;
+       padding:calc(env(safe-area-inset-top) + 16px) 16px calc(env(safe-area-inset-bottom) + 24px)}
+  h1{font-size:22px;margin:0 0 4px}
+  #status{color:var(--mut);font-size:14px;margin-bottom:16px}
+  #status.ok{color:var(--ok)} #status.bad{color:var(--bad)}
+  .card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut);margin:0 0 12px}
+  button{font:inherit;border:0;border-radius:12px;padding:14px;color:var(--txt);background:#2a2e35;width:100%}
+  button:active{transform:scale(.97)}
+  button.primary{background:var(--acc);color:#1a1200;font-weight:600}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .row3{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+  input[type=range]{width:100%;accent-color:var(--acc);height:32px}
+  .lbl{display:flex;justify-content:space-between;color:var(--mut);font-size:13px}
+  .sw{aspect-ratio:1;border-radius:50%;padding:0;border:2px solid #0003}
+  input[type=color]{width:100%;height:52px;border:0;border-radius:12px;background:none;padding:0}
+  .disabled{opacity:.4;pointer-events:none}
+  #log{font:12px ui-monospace,monospace;color:var(--mut);white-space:pre-wrap;max-height:90px;overflow:auto}
+</style>
+</head>
+<body>
+<h1>💡 Control BeeWi</h1>
+<div id="status">Sin conectar</div>
+
+<div class="card">
+  <button id="connect" class="primary">Conectar lámpara</button>
+</div>
+
+<div id="controls" class="disabled">
+  <div class="card">
+    <h2>Encendido</h2>
+    <div class="row">
+      <button data-cmd="5510010D0A">Prender</button>
+      <button data-cmd="5510000D0A">Apagar</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Brillo</h2>
+    <input type="range" id="bri" min="0" max="9" value="9">
+    <div class="lbl"><span>Mínimo</span><span>Máximo</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Blanco</h2>
+    <button data-cmd="5514FFFFFF0D0A" style="margin-bottom:12px">Modo blanco</button>
+    <input type="range" id="temp" min="0" max="9" value="5">
+    <div class="lbl"><span>Frío</span><span>Cálido</span></div>
+  </div>
+
+  <div class="card">
+    <h2>Color</h2>
+    <div class="row3" style="margin-bottom:12px" id="swatches"></div>
+    <input type="color" id="color" value="#ff8800">
+  </div>
+
+  <div class="card">
+    <h2>Secuencias</h2>
+    <div class="row3">
+      <button data-cmd="5517080D0A">1</button>
+      <button data-cmd="5517090D0A">2</button>
+      <button data-cmd="55170A0D0A">3</button>
+      <button data-cmd="55170B0D0A">4</button>
+      <button data-cmd="55170C0D0A">5</button>
+    </div>
+  </div>
+</div>
+
+<div class="card"><h2>Registro</h2><div id="log"></div></div>
+
+<script>
+const SERVICE = "a8b3fff0-4834-4051-89d0-3de95cddd318";
+const CHAR    = "a8b3fff1-4834-4051-89d0-3de95cddd318";
+let device = null, ch = null, busy = Promise.resolve();
+
+const $ = id => document.getElementById(id);
+const log = m => { const l=$("log"); l.textContent = m + "\n" + l.textContent; };
+const setStatus = (t, cls) => { const s=$("status"); s.textContent=t; s.className=cls||""; };
+const hex = h => new Uint8Array(h.match(/../g).map(b => parseInt(b,16)));
+const b2 = n => n.toString(16).padStart(2,"0").toUpperCase();
+
+function send(h){
+  if(!ch){ setStatus("Conectá la lámpara primero","bad"); return; }
+  busy = busy.then(async () => {
+    try{
+      const data = hex(h);
+      if (ch.writeValueWithoutResponse && !ch.properties.write) await ch.writeValueWithoutResponse(data);
+      else await ch.writeValue(data);
+      log("→ " + h);
+    }catch(e){ log("Error: " + e.message); }
+  });
+}
+
+$("connect").onclick = async () => {
+  if(!navigator.bluetooth){
+    setStatus("Este navegador no tiene Bluetooth. Abrí la página en Bluefy.","bad"); return;
+  }
+  try{
+    setStatus("Buscando…");
+    device = await navigator.bluetooth.requestDevice({ acceptAllDevices:true, optionalServices:[SERVICE] });
+    device.addEventListener("gattserverdisconnected", () => {
+      ch = null; $("controls").classList.add("disabled");
+      setStatus("Desconectada","bad"); $("connect").textContent="Reconectar";
+    });
+    setStatus("Conectando a " + (device.name||"lámpara") + "…");
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SERVICE);
+    ch = await svc.getCharacteristic(CHAR);
+    $("controls").classList.remove("disabled");
+    setStatus("Conectada: " + (device.name||"lámpara"),"ok");
+    $("connect").textContent = "Conectar otra";
+  }catch(e){
+    setStatus("No se pudo conectar: " + e.message,"bad"); log(e.message);
+  }
+};
+
+document.querySelectorAll("[data-cmd]").forEach(b => b.onclick = () => send(b.dataset.cmd));
+
+let t1, t2, t3;
+$("bri").oninput  = e => { clearTimeout(t1); t1=setTimeout(()=>send("5512"+b2(+e.target.value+2)+"0D0A"),120); };
+$("temp").oninput = e => { clearTimeout(t2); t2=setTimeout(()=>send("5511"+b2(+e.target.value+2)+"0D0A"),120); };
+const sendColor = c => send("5513" + c.replace("#","").toUpperCase() + "0D0A");
+$("color").oninput = e => { clearTimeout(t3); t3=setTimeout(()=>sendColor(e.target.value),150); };
+
+["#ff0000","#ff8800","#ffee00","#00ff00","#00ffff","#0000ff","#8800ff","#ff00ff","#ff3366","#ffffff"].forEach(c=>{
+  const b=document.createElement("button"); b.className="sw"; b.style.background=c;
+  b.onclick=()=>{ $("color").value=c; sendColor(c); }; $("swatches").appendChild(b);
+});
+</script>
+</body>
+</html>
